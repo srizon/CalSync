@@ -13,9 +13,19 @@ export type SyncResult = {
     cancelledOrNoId: number;
     calSyncMirror: number;
     notBusy: number;
+    declinedByYou: number;
     missingStartOrEnd: number;
   };
 };
+
+/** True when this calendar copy is an invitation you declined (RSVP). */
+export function isEventDeclinedBySelf(ev: calendar_v3.Schema$Event): boolean {
+  const attendees = ev.attendees;
+  if (!attendees?.length) return false;
+  return attendees.some(
+    (a) => a.self === true && a.responseStatus === "declined"
+  );
+}
 
 function classifySkip(
   ev: calendar_v3.Schema$Event
@@ -23,6 +33,7 @@ function classifySkip(
   if (!ev.id || ev.status === "cancelled") return "cancelledOrNoId";
   if (ev.extendedProperties?.private?.[CALSYNC_SOURCE_KEY]) return "calSyncMirror";
   if (ev.transparency === "transparent") return "notBusy";
+  if (isEventDeclinedBySelf(ev)) return "declinedByYou";
   return null;
 }
 
@@ -62,6 +73,51 @@ export async function listAllEvents(
   return out;
 }
 
+const CLEAR_MIRRORS_PAST_DAYS = 365 * 5;
+
+/**
+ * Deletes every CalSync mirror block on a calendar (events with private
+ * `calsyncSource`). Uses a wide time range so past mirrors are included
+ * (normal sync only lists from now onward).
+ */
+export async function clearMirrorsOnCalendar(
+  cal: calendar_v3.Calendar,
+  calendarId: string
+): Promise<{ deleted: number; errors: string[] }> {
+  const now = new Date();
+  const timeMin = new Date(now);
+  timeMin.setDate(timeMin.getDate() - CLEAR_MIRRORS_PAST_DAYS);
+  const timeMax = new Date(now);
+  timeMax.setDate(timeMax.getDate() + SYNC_WINDOW_DAYS);
+
+  const errors: string[] = [];
+  let items: calendar_v3.Schema$Event[];
+  try {
+    items = await listAllEvents(cal, calendarId, timeMin, timeMax);
+  } catch (e) {
+    return {
+      deleted: 0,
+      errors: [e instanceof Error ? e.message : String(e)],
+    };
+  }
+
+  let deleted = 0;
+  for (const ev of items) {
+    const mk = parseMirrorKey(ev);
+    if (!mk || !ev.id) continue;
+    try {
+      await cal.events.delete({ calendarId, eventId: ev.id });
+      deleted += 1;
+    } catch (e) {
+      errors.push(
+        `Delete mirror ${ev.id}: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
+  }
+
+  return { deleted, errors };
+}
+
 type BlockSpec = {
   key: string;
   summary: string;
@@ -96,6 +152,7 @@ export async function runMirrorSync(
       cancelledOrNoId: 0,
       calSyncMirror: 0,
       notBusy: 0,
+      declinedByYou: 0,
       missingStartOrEnd: 0,
     },
   };
@@ -172,9 +229,29 @@ export async function runMirrorSync(
     const desired = desiredByTarget[targetId]!;
     const existing = byCal[targetId] ?? [];
     const mirrors = new Map<string, calendar_v3.Schema$Event>();
+    const duplicateMirrorEvents: calendar_v3.Schema$Event[] = [];
     for (const ev of existing) {
       const mk = parseMirrorKey(ev);
-      if (mk && ev.id) mirrors.set(mk, ev);
+      if (!mk || !ev.id) continue;
+      if (mirrors.has(mk)) {
+        duplicateMirrorEvents.push(ev);
+      } else {
+        mirrors.set(mk, ev);
+      }
+    }
+
+    for (const ev of duplicateMirrorEvents) {
+      try {
+        await targetCal.events.delete({
+          calendarId: targetId,
+          eventId: ev.id!,
+        });
+        result.deleted += 1;
+      } catch (e) {
+        result.errors.push(
+          `Delete duplicate mirror on ${targetId}: ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
     }
 
     for (const [key, mirrorEv] of mirrors) {
@@ -247,6 +324,7 @@ export async function runMirrorSync(
     sk.cancelledOrNoId === 0 &&
     sk.calSyncMirror === 0 &&
     sk.notBusy === 0 &&
+    sk.declinedByYou === 0 &&
     sk.missingStartOrEnd === 0
   ) {
     delete result.skipped;

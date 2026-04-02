@@ -3,7 +3,7 @@ import type { calendar_v3 } from "googleapis";
 import { readStore, isStoreConnected } from "@/lib/store";
 import { resolveClientForCalendar } from "@/lib/accounts";
 import { CALSYNC_SOURCE_KEY } from "@/lib/constants";
-import { listAllEvents } from "@/lib/sync";
+import { isEventDeclinedBySelf, listAllEvents } from "@/lib/sync";
 import { listCalendarsMerged } from "@/lib/calendar-directory";
 
 export const runtime = "nodejs";
@@ -89,7 +89,8 @@ export async function GET(req: NextRequest) {
         (ev) =>
           ev.status !== "cancelled" &&
           ev.transparency !== "transparent" &&
-          !ev.extendedProperties?.private?.[CALSYNC_SOURCE_KEY]
+          !ev.extendedProperties?.private?.[CALSYNC_SOURCE_KEY] &&
+          !isEventDeclinedBySelf(ev)
       );
       for (const ev of visible) {
         rows.push({

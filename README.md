@@ -76,7 +76,7 @@ After you sign in, the dashboard uses two tabs:
 
 Refresh tokens and preferences are written to `.data/store.json` on this machine. Include `.data/` in backups if you move servers.
 
-**API (optional):** Authenticated sessions can call `GET /api/events?days=30` (1–90) for JSON of the same upcoming-events window used by the dashboard. You can also trigger a sync with `POST /api/sync` (same session cookie) or from automation if you expose it appropriately.
+**API (optional):** Authenticated sessions can call `GET /api/events?days=30` (1–90) for JSON of the same upcoming-events window used by the dashboard. You can trigger a sync with `POST /api/sync` (same session cookie) or from automation if you expose it appropriately. To strip only CalSync mirror blocks from one calendar (not your real events), `POST /api/calendars/clear-mirrors` with JSON `{ "calendarId": "<id>" }`.
 
 ### 6. Production build (optional)
 
@@ -97,6 +97,19 @@ Ensure `CALSYNC_PUBLIC_URL` matches the URL users use (HTTPS for Google Calendar
 | `npm run build:webpack` | Production build using Webpack |
 | `npm run start` | Run production server |
 | `npm run lint` | ESLint |
+
+## Changelog
+
+### [0.1.0] — 2026-04-03
+
+- **Core:** Next.js 16 (App Router), Google OAuth, busy-block mirroring across a chosen calendar group, local persistence in `.data/store.json`, optional push notifications and cron for watch renewal (see env docs).
+- **Dashboard:** **Upcoming events** and **Sync setup** tabs; calendars merged across linked Google accounts; last-sync summary with skip reasons.
+- **API:** `GET /api/events?days=…` (1–90), `POST /api/sync`, `POST /api/calendars/clear-mirrors` (session-authenticated).
+- **Tooling:** `npm run dev` / `npm run build` (Turbopack); optional `npm run dev:webpack` and `npm run build:webpack`.
+- **Declined invitations:** Events where your RSVP is *Declined* are omitted from the upcoming list, are not sources for mirrors, and sync skip stats can include `declinedByYou`.
+- **Clear mirrors:** Per-calendar control on Sync setup (and the clear-mirrors API) deletes CalSync mirror events over a wide past range plus the normal forward window; your own non-mirror events are untouched.
+- **Sync cleanup:** Duplicate CalSync mirrors on the same target (same mirror key) are deleted during sync.
+- **UI:** Calendar create/add flows were removed from the home page in favor of managing the sync group and calendars in Google Calendar / settings.
 
 ## Tech stack
 

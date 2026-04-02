@@ -538,6 +538,7 @@ export default function Home() {
       cancelledOrNoId: number;
       calSyncMirror: number;
       notBusy: number;
+      declinedByYou: number;
       missingStartOrEnd: number;
     };
   } | null>(null);
@@ -548,6 +549,8 @@ export default function Home() {
   const [eventsErr, setEventsErr] = useState<string | null>(null);
   const [eventsRows, setEventsRows] = useState<ListedEvent[]>([]);
   const [eventsLoadWarnings, setEventsLoadWarnings] = useState<string[]>([]);
+  const [clearMirrorsBusy, setClearMirrorsBusy] = useState<string | null>(null);
+  const [clearMirrorsNote, setClearMirrorsNote] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoadErr(null);
@@ -750,6 +753,44 @@ export default function Home() {
     });
     setLoading(true);
     await refresh();
+  };
+
+  const clearMirrorsForCalendar = async (calendarId: string, summary: string) => {
+    setClearMirrorsNote(null);
+    const ok = window.confirm(
+      `Remove all CalSync mirrored busy blocks from “${summary}”? Your own events are not deleted.`
+    );
+    if (!ok) return;
+    setClearMirrorsBusy(calendarId);
+    try {
+      const r = await fetch("/api/calendars/clear-mirrors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ calendarId }),
+      });
+      const j = (await r.json()) as {
+        deleted?: number;
+        errors?: string[];
+        message?: string;
+        error?: string;
+      };
+      if (!r.ok) {
+        throw new Error(j.message || j.error || "Request failed");
+      }
+      const n = j.deleted ?? 0;
+      const errList = j.errors ?? [];
+      setClearMirrorsNote(
+        errList.length
+          ? `Removed ${n} mirror block(s); some errors: ${errList.join("; ")}`
+          : `Removed ${n} mirror block${n === 1 ? "" : "s"} from “${summary}”.`
+      );
+    } catch (e) {
+      setClearMirrorsNote(
+        e instanceof Error ? e.message : String(e)
+      );
+    } finally {
+      setClearMirrorsBusy(null);
+    }
   };
 
   const displayError = useMemo(
@@ -985,33 +1026,62 @@ export default function Home() {
             <h2 className="text-sm font-medium text-zinc-200">
               Calendars in sync group
             </h2>
+            {clearMirrorsNote ? (
+              <p
+                className={`rounded-lg border px-3 py-2 text-xs ${
+                  clearMirrorsNote.startsWith("Removed") &&
+                  !clearMirrorsNote.includes("some errors")
+                    ? "border-zinc-700/60 bg-zinc-900/40 text-zinc-300"
+                    : clearMirrorsNote.startsWith("Removed")
+                      ? "border-amber-900/40 bg-amber-950/20 text-amber-200/90"
+                      : "border-red-900/50 bg-red-950/30 text-red-200/90"
+                }`}
+                role="status"
+              >
+                {clearMirrorsNote}
+              </p>
+            ) : null}
             <ul className="divide-y divide-zinc-800/40">
               {calendars.map((c) => (
                 <li key={c.id}>
-                  <label className="flex cursor-pointer items-start gap-3 py-3 hover:bg-zinc-900/30">
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={selected.has(c.id)}
-                      onChange={() => toggle(c.id)}
-                    />
-                    <span className="text-sm">
-                      <span className="text-zinc-100">{c.summary}</span>
-                      {c.primary ? (
-                        <span className="ml-2 text-xs text-amber-400/90">
-                          primary
+                  <div className="flex flex-wrap items-start justify-between gap-2 py-3 hover:bg-zinc-900/30">
+                    <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={selected.has(c.id)}
+                        onChange={() => toggle(c.id)}
+                      />
+                      <span className="text-sm">
+                        <span className="text-zinc-100">{c.summary}</span>
+                        {c.primary ? (
+                          <span className="ml-2 text-xs text-amber-400/90">
+                            primary
+                          </span>
+                        ) : null}
+                        {c.accountEmail ? (
+                          <span className="ml-2 text-xs text-zinc-500">
+                            · {c.accountEmail}
+                          </span>
+                        ) : null}
+                        <span className="mt-0.5 block font-mono text-[11px] text-zinc-600">
+                          {c.id}
                         </span>
-                      ) : null}
-                      {c.accountEmail ? (
-                        <span className="ml-2 text-xs text-zinc-500">
-                          · {c.accountEmail}
-                        </span>
-                      ) : null}
-                      <span className="mt-0.5 block font-mono text-[11px] text-zinc-600">
-                        {c.id}
                       </span>
-                    </span>
-                  </label>
+                    </label>
+                    <button
+                      type="button"
+                      disabled={clearMirrorsBusy === c.id}
+                      onClick={() =>
+                        void clearMirrorsForCalendar(c.id, c.summary)
+                      }
+                      className="shrink-0 text-xs text-zinc-500 underline-offset-4 hover:text-zinc-300 hover:underline disabled:opacity-50"
+                    >
+                      {clearMirrorsBusy === c.id
+                        ? "Clearing…"
+                        : "Clear mirrors"}
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -1059,6 +1129,8 @@ export default function Home() {
                       `${lastSync.skipped.calSyncMirror} already CalSync mirrors`,
                     lastSync.skipped.cancelledOrNoId > 0 &&
                       `${lastSync.skipped.cancelledOrNoId} cancelled or without id`,
+                    lastSync.skipped.declinedByYou > 0 &&
+                      `${lastSync.skipped.declinedByYou} declined by you`,
                     lastSync.skipped.missingStartOrEnd > 0 &&
                       `${lastSync.skipped.missingStartOrEnd} missing start/end`,
                   ]
