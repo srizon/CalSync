@@ -1,0 +1,256 @@
+import type { calendar_v3 } from "googleapis";
+import { CALSYNC_SOURCE_KEY, SYNC_WINDOW_DAYS } from "./constants";
+
+export type SyncResult = {
+  created: number;
+  updated: number;
+  deleted: number;
+  errors: string[];
+  /** Total event rows returned from Google for calendars in the sync group (includes mirrors). */
+  eventsListed?: number;
+  /** Source-side events not used as busy blocks (helps explain 0 created/updated). */
+  skipped?: {
+    cancelledOrNoId: number;
+    calSyncMirror: number;
+    notBusy: number;
+    missingStartOrEnd: number;
+  };
+};
+
+function classifySkip(
+  ev: calendar_v3.Schema$Event
+): keyof NonNullable<SyncResult["skipped"]> | null {
+  if (!ev.id || ev.status === "cancelled") return "cancelledOrNoId";
+  if (ev.extendedProperties?.private?.[CALSYNC_SOURCE_KEY]) return "calSyncMirror";
+  if (ev.transparency === "transparent") return "notBusy";
+  return null;
+}
+
+function sourceKey(calendarId: string, eventId: string) {
+  return `${calendarId}|${eventId}`;
+}
+
+function parseMirrorKey(
+  ev: calendar_v3.Schema$Event
+): string | null {
+  const v = ev.extendedProperties?.private?.[CALSYNC_SOURCE_KEY];
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+async function listAllEvents(
+  cal: calendar_v3.Calendar,
+  calendarId: string,
+  timeMin: Date,
+  timeMax: Date
+): Promise<calendar_v3.Schema$Event[]> {
+  const out: calendar_v3.Schema$Event[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await cal.events.list({
+      calendarId,
+      timeMin: timeMin.toISOString(),
+      timeMax: timeMax.toISOString(),
+      singleEvents: true,
+      orderBy: "startTime",
+      maxResults: 250,
+      pageToken,
+    });
+    const items = res.data.items ?? [];
+    out.push(...items);
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+  return out;
+}
+
+type BlockSpec = {
+  key: string;
+  summary: string;
+  start: calendar_v3.Schema$EventDateTime;
+  end: calendar_v3.Schema$EventDateTime;
+};
+
+function toBlockSpec(
+  sourceCalendarId: string,
+  ev: calendar_v3.Schema$Event,
+  sourceLabel: string
+): BlockSpec | null {
+  if (!ev.start || !ev.end) return null;
+  const key = sourceKey(sourceCalendarId, ev.id!);
+  const summary = ev.summary?.trim()
+    ? `Busy (${ev.summary.trim()})`
+    : `Busy (${sourceLabel})`;
+  return { key, summary, start: ev.start, end: ev.end };
+}
+
+export async function runMirrorSync(
+  clientFor: (calendarId: string) => calendar_v3.Calendar | undefined,
+  calendarIds: string[],
+  calendarLabels: Record<string, string>
+): Promise<SyncResult> {
+  const result: SyncResult = {
+    created: 0,
+    updated: 0,
+    deleted: 0,
+    errors: [],
+    skipped: {
+      cancelledOrNoId: 0,
+      calSyncMirror: 0,
+      notBusy: 0,
+      missingStartOrEnd: 0,
+    },
+  };
+  if (calendarIds.length < 2) {
+    result.errors.push("Select at least two calendars to sync.");
+    delete result.skipped;
+    return result;
+  }
+
+  const now = new Date();
+  const timeMax = new Date(now);
+  timeMax.setDate(timeMax.getDate() + SYNC_WINDOW_DAYS);
+
+  const byCal: Record<string, calendar_v3.Schema$Event[]> = {};
+  for (const id of calendarIds) {
+    const cal = clientFor(id);
+    if (!cal) {
+      result.errors.push(`No Google account linked for calendar ${id}.`);
+      continue;
+    }
+    try {
+      byCal[id] = await listAllEvents(cal, id, now, timeMax);
+    } catch (e) {
+      result.errors.push(
+        `List failed for ${id}: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
+  }
+
+  let listed = 0;
+  for (const id of calendarIds) {
+    listed += byCal[id]?.length ?? 0;
+  }
+  result.eventsListed = listed;
+
+  /** For target calendar T: map sourceKey -> desired block */
+  const desiredByTarget: Record<string, Map<string, BlockSpec>> = {};
+  for (const targetId of calendarIds) {
+    desiredByTarget[targetId] = new Map();
+  }
+
+  for (const sourceId of calendarIds) {
+    const label = calendarLabels[sourceId] || sourceId;
+    for (const ev of byCal[sourceId] ?? []) {
+      const skipKind = classifySkip(ev);
+      if (skipKind) {
+        result.skipped![skipKind] += 1;
+        continue;
+      }
+      const spec = toBlockSpec(sourceId, ev, label);
+      if (!spec) {
+        result.skipped!.missingStartOrEnd += 1;
+        continue;
+      }
+      for (const targetId of calendarIds) {
+        if (targetId === sourceId) continue;
+        desiredByTarget[targetId]!.set(spec.key, {
+          ...spec,
+          summary:
+            spec.summary.startsWith("Busy (") && spec.summary.endsWith(")")
+              ? spec.summary
+              : `Busy (${label})`,
+        });
+      }
+    }
+  }
+
+  for (const targetId of calendarIds) {
+    const targetCal = clientFor(targetId);
+    if (!targetCal) {
+      result.errors.push(`No Google account linked for calendar ${targetId}.`);
+      continue;
+    }
+    const desired = desiredByTarget[targetId]!;
+    const existing = byCal[targetId] ?? [];
+    const mirrors = new Map<string, calendar_v3.Schema$Event>();
+    for (const ev of existing) {
+      const mk = parseMirrorKey(ev);
+      if (mk && ev.id) mirrors.set(mk, ev);
+    }
+
+    for (const [key, mirrorEv] of mirrors) {
+      if (!desired.has(key)) {
+        try {
+          await targetCal.events.delete({
+            calendarId: targetId,
+            eventId: mirrorEv.id!,
+          });
+          result.deleted += 1;
+        } catch (e) {
+          result.errors.push(
+            `Delete mirror on ${targetId}: ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
+      }
+    }
+
+    for (const [key, spec] of desired) {
+      const existingMirror = mirrors.get(key);
+      const body: calendar_v3.Schema$Event = {
+        summary: spec.summary,
+        description: "Blocked by CalSync to mirror another calendar.",
+        start: spec.start,
+        end: spec.end,
+        transparency: "opaque",
+        extendedProperties: {
+          private: { [CALSYNC_SOURCE_KEY]: key },
+        },
+      };
+
+      if (!existingMirror) {
+        try {
+          await targetCal.events.insert({
+            calendarId: targetId,
+            requestBody: body,
+          });
+          result.created += 1;
+        } catch (e) {
+          result.errors.push(
+            `Create mirror on ${targetId}: ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
+        continue;
+      }
+
+      const same =
+        existingMirror.summary === body.summary &&
+        JSON.stringify(existingMirror.start) === JSON.stringify(body.start) &&
+        JSON.stringify(existingMirror.end) === JSON.stringify(body.end);
+      if (same) continue;
+
+      try {
+        await targetCal.events.patch({
+          calendarId: targetId,
+          eventId: existingMirror.id!,
+          requestBody: body,
+        });
+        result.updated += 1;
+      } catch (e) {
+        result.errors.push(
+          `Update mirror on ${targetId}: ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
+    }
+  }
+
+  const sk = result.skipped!;
+  if (
+    sk.cancelledOrNoId === 0 &&
+    sk.calSyncMirror === 0 &&
+    sk.notBusy === 0 &&
+    sk.missingStartOrEnd === 0
+  ) {
+    delete result.skipped;
+  }
+
+  return result;
+}
