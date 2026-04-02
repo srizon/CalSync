@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type SVGProps,
+} from "react";
 
 type Account = { id: string; email: string | null };
 
@@ -118,6 +124,402 @@ function formatEventSchedule(ev: ListedEvent): string {
   return `${start.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} – ${end.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
 }
 
+function IconClock(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...props}
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 6v6l4 2" />
+    </svg>
+  );
+}
+
+function IconCalendar(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...props}
+    >
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <path d="M16 2v4M8 2v4M3 10h18" />
+    </svg>
+  );
+}
+
+function eventDayStartMs(ev: ListedEvent): number | null {
+  const s = ev.start;
+  if (!s) return null;
+  if (s.dateTime) {
+    const d = new Date(s.dateTime);
+    if (Number.isNaN(d.getTime())) return null;
+    return startOfLocalDay(d);
+  }
+  if (s.date) return startOfLocalDay(parseGCalDate(s.date));
+  return null;
+}
+
+function formatDayHeading(dayMs: number): string {
+  const d = new Date(dayMs);
+  const now = new Date();
+  const y = now.getFullYear();
+  const today0 = startOfLocalDay(now);
+  const tomorrow0 = today0 + 86_400_000;
+  if (dayMs === today0) return "Today";
+  if (dayMs === tomorrow0) return "Tomorrow";
+  const opts: Intl.DateTimeFormatOptions =
+    d.getFullYear() !== y
+      ? { weekday: "long", month: "short", day: "numeric", year: "numeric" }
+      : { weekday: "long", month: "short", day: "numeric" };
+  return d.toLocaleDateString(undefined, opts);
+}
+
+/** Time / schedule line for an event when a day section header already shows the date. */
+function formatEventTimeInDay(ev: ListedEvent, groupDayMs: number): string {
+  const s = ev.start;
+  const e = ev.end;
+  if (!s) return "—";
+
+  if (s.date && !s.dateTime) {
+    const sd = s.date;
+    const ed = e?.date;
+    const sdt = parseGCalDate(sd);
+    const start0 = startOfLocalDay(sdt);
+    if (!ed) {
+      return start0 === groupDayMs
+        ? "All day"
+        : sdt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+    const edt = parseGCalDate(ed);
+    const dayMs = 86_400_000;
+    const span = edt.getTime() - sdt.getTime();
+    if (span <= dayMs) {
+      return start0 === groupDayMs
+        ? "All day"
+        : sdt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+    const endInclusive = new Date(edt);
+    endInclusive.setDate(endInclusive.getDate() - 1);
+    return `${sdt.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${endInclusive.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+  }
+
+  if (!s.dateTime) return "—";
+  const start = new Date(s.dateTime);
+  if (Number.isNaN(start.getTime())) return "—";
+  const end = e?.dateTime ? new Date(e.dateTime) : null;
+  if (!end || Number.isNaN(end.getTime())) {
+    return start.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+  const sameDay = startOfLocalDay(start) === startOfLocalDay(end);
+  const tfmt: Intl.DateTimeFormatOptions = {
+    hour: "numeric",
+    minute: "2-digit",
+  };
+  const a = start.toLocaleTimeString(undefined, tfmt);
+  const b = end.toLocaleTimeString(undefined, tfmt);
+  if (sameDay && startOfLocalDay(start) === groupDayMs) {
+    return `${a} – ${b}`;
+  }
+  if (sameDay) {
+    const now = new Date();
+    const today0 = startOfLocalDay(now);
+    const tomorrow0 = today0 + 86_400_000;
+    const start0 = startOfLocalDay(start);
+    let datePrefix: string;
+    if (start0 === today0) datePrefix = "Today";
+    else if (start0 === tomorrow0) datePrefix = "Tomorrow";
+    else {
+      datePrefix = start.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      });
+    }
+    if (datePrefix === "Today" || datePrefix === "Tomorrow") {
+      return `${datePrefix} ${a}–${b}`;
+    }
+    return `${datePrefix} • ${a}–${b}`;
+  }
+  return `${start.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} – ${end.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+}
+
+function joinMeetingLabel(url: string): string {
+  try {
+    const u = new URL(url);
+    const h = u.hostname.toLowerCase();
+    if (h.includes("meet.google")) return "Join Google Meet";
+    if (h.includes("zoom.us")) return "Join Zoom";
+    if (h.includes("teams.microsoft")) return "Join Teams";
+    if (h.includes("webex.com")) return "Join Webex";
+  } catch {
+    /* ignore */
+  }
+  return "Join meeting";
+}
+
+function eventTimedBounds(
+  ev: ListedEvent
+): { start: number; end: number } | null {
+  const s = ev.start?.dateTime;
+  const e = ev.end?.dateTime;
+  if (!s || !e) return null;
+  const start = new Date(s).getTime();
+  const end = new Date(e).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return null;
+  return { start, end };
+}
+
+/** All-day event: local calendar day `now` falls on an in-range day (end exclusive). */
+function allDayActiveNow(ev: ListedEvent, now: Date): boolean {
+  const s = ev.start;
+  if (!s?.date || s.dateTime) return false;
+  const startDay = startOfLocalDay(parseGCalDate(s.date));
+  let endExclusive: number;
+  if (ev.end?.date) {
+    endExclusive = startOfLocalDay(parseGCalDate(ev.end.date));
+  } else {
+    endExclusive = startDay + 86_400_000;
+  }
+  const now0 = startOfLocalDay(now);
+  return now0 >= startDay && now0 < endExclusive;
+}
+
+function formatStartsIn(ms: number): string {
+  if (ms < 60_000) return "Starting soon";
+  if (ms < 3_600_000) {
+    const m = Math.max(1, Math.ceil(ms / 60_000));
+    return `Starts in ${m} min`;
+  }
+  if (ms < 86_400_000) {
+    const h = Math.floor(ms / 3_600_000);
+    const m = Math.ceil((ms % 3_600_000) / 60_000);
+    if (m === 60) return `Starts in ${h + 1}h`;
+    if (m === 0 || h === 0) {
+      if (h === 0) return `Starts in ${m} min`;
+      return `Starts in ${h}h`;
+    }
+    return `Starts in ${h}h ${m}m`;
+  }
+  const d = Math.ceil(ms / 86_400_000);
+  if (d === 1) return "Starts tomorrow";
+  return `Starts in ${d} days`;
+}
+
+type ListHeadStatus =
+  | { type: "live_timed"; remainingMin: number }
+  | { type: "live_allday" }
+  | { type: "upcoming"; label: string };
+
+function computeListHeadStatus(ev: ListedEvent, now: Date): ListHeadStatus | null {
+  const t = now.getTime();
+  const bounds = eventTimedBounds(ev);
+  if (bounds) {
+    if (t >= bounds.end) return null;
+    if (t >= bounds.start) {
+      const remainingMin = Math.max(1, Math.ceil((bounds.end - t) / 60_000));
+      return { type: "live_timed", remainingMin };
+    }
+    return { type: "upcoming", label: formatStartsIn(bounds.start - t) };
+  }
+  if (allDayActiveNow(ev, now)) {
+    return { type: "live_allday" };
+  }
+  if (ev.start?.date && !ev.start.dateTime) {
+    const startDay = startOfLocalDay(parseGCalDate(ev.start.date));
+    const now0 = startOfLocalDay(now);
+    if (startDay > now0) {
+      const daysUntil = Math.round((startDay - now0) / 86_400_000);
+      if (daysUntil === 1) {
+        return { type: "upcoming", label: "Starts tomorrow (all day)" };
+      }
+      return {
+        type: "upcoming",
+        label: `Starts in ${daysUntil} days (all day)`,
+      };
+    }
+  }
+  return null;
+}
+
+function MeetingJoinLink({ url }: { url: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center justify-center rounded-md bg-sky-600/90 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-sky-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+    >
+      {joinMeetingLabel(url)}
+    </a>
+  );
+}
+
+function listHeadTagText(status: ListHeadStatus): string {
+  if (status.type === "live_timed") {
+    return `Ends in ${status.remainingMin} min`;
+  }
+  if (status.type === "live_allday") {
+    return "All day";
+  }
+  return status.label;
+}
+
+function ListHeadTag({ status }: { status: ListHeadStatus }) {
+  return (
+    <span
+      role="status"
+      className="inline-flex shrink-0 items-center rounded-full bg-zinc-800/70 px-2.5 py-0.5 text-[11px] font-medium text-zinc-400"
+    >
+      {listHeadTagText(status)}
+    </span>
+  );
+}
+
+function AgendaEventRow({
+  ev,
+  groupDayMs,
+  isListHead,
+  now,
+}: {
+  ev: ListedEvent;
+  groupDayMs?: number;
+  isListHead: boolean;
+  now: Date;
+}) {
+  const timeLabel =
+    groupDayMs != null
+      ? formatEventTimeInDay(ev, groupDayMs)
+      : formatEventSchedule(ev);
+  const headStatus = isListHead ? computeListHeadStatus(ev, now) : null;
+  return (
+    <li className="py-5 first:pt-0">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <EventTitle ev={ev} />
+            {headStatus ? <ListHeadTag status={headStatus} /> : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+            <span className="inline-flex items-center gap-1.5">
+              <IconClock className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
+              <span className="text-zinc-400">{timeLabel}</span>
+            </span>
+            <span className="text-zinc-600">·</span>
+            <span
+              className="inline-flex max-w-full items-center gap-1.5 text-[11px] text-zinc-500"
+              title={ev.calendarSummary}
+            >
+              <IconCalendar className="h-3 w-3 shrink-0 text-zinc-600" />
+              <span className="truncate">{ev.calendarSummary}</span>
+            </span>
+          </div>
+          {showAccountEmailBelow(ev) ? (
+            <p className="text-[11px] text-zinc-600">
+              {ev.accountEmail ?? "Google account"}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 flex-col gap-2 sm:min-w-[10.5rem] sm:items-end">
+          {ev.meetingUrl ? <MeetingJoinLink url={ev.meetingUrl} /> : null}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function isAgendaListHead(
+  ev: ListedEvent,
+  groupDayMs: number | undefined,
+  head: {
+    calendarId: string;
+    id: string | null;
+    startKey: string;
+    dayMs: number | null;
+    nodate: boolean;
+  } | null
+): boolean {
+  if (!head) return false;
+  const sk = ev.start?.dateTime ?? ev.start?.date ?? "";
+  if (
+    ev.calendarId !== head.calendarId ||
+    ev.id !== head.id ||
+    sk !== head.startKey
+  ) {
+    return false;
+  }
+  if (head.nodate) return groupDayMs === undefined;
+  return groupDayMs === head.dayMs;
+}
+
+function groupEventsByLocalDay(rows: ListedEvent[]): {
+  groups: { dayMs: number; label: string; events: ListedEvent[] }[];
+  noDay: ListedEvent[];
+} {
+  const map = new Map<number, ListedEvent[]>();
+  const noDay: ListedEvent[] = [];
+  for (const ev of rows) {
+    const ms = eventDayStartMs(ev);
+    if (ms == null) {
+      noDay.push(ev);
+      continue;
+    }
+    if (!map.has(ms)) map.set(ms, []);
+    map.get(ms)!.push(ev);
+  }
+  const groups = [...map.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([dayMs, events]) => ({
+      dayMs,
+      label: formatDayHeading(dayMs),
+      events,
+    }));
+  return { groups, noDay };
+}
+
+/** Calendar list row often repeats the owning account email; show the extra line only when it adds info. */
+function showAccountEmailBelow(ev: ListedEvent): boolean {
+  const acct = ev.accountEmail?.trim().toLowerCase() ?? "";
+  const cal = ev.calendarSummary?.trim().toLowerCase() ?? "";
+  if (!acct) return true;
+  if (cal && acct === cal) return false;
+  return true;
+}
+
+function EventTitle({ ev }: { ev: ListedEvent }) {
+  const text = ev.summary?.trim() || "(No title)";
+  const base = "text-[15px] font-medium leading-snug";
+  if (!ev.htmlLink) {
+    return <p className={`${base} text-zinc-50`}>{text}</p>;
+  }
+  return (
+    <a
+      href={ev.htmlLink}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`${base} block w-fit text-zinc-50 decoration-zinc-600 underline-offset-2 hover:text-white hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-500`}
+    >
+      {text}
+    </a>
+  );
+}
+
 export default function Home() {
   const [urlError, setUrlError] = useState<string | null>(null);
   const [me, setMe] = useState<Me | null>(null);
@@ -147,7 +549,7 @@ export default function Home() {
   const [addErr, setAddErr] = useState<string | null>(null);
   const [calendarOwnerAccountId, setCalendarOwnerAccountId] = useState("");
   const [dashTab, setDashTab] = useState<"sync" | "events">("events");
-  const [eventsDays, setEventsDays] = useState(30);
+  const [eventsDays, setEventsDays] = useState(7);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsErr, setEventsErr] = useState<string | null>(null);
   const [eventsRows, setEventsRows] = useState<ListedEvent[]>([]);
@@ -207,6 +609,47 @@ export default function Home() {
     () => (me?.syncCalendarIds ?? []).join("\0"),
     [me?.syncCalendarIds]
   );
+
+  const eventsGrouped = useMemo(
+    () => groupEventsByLocalDay(eventsRows),
+    [eventsRows]
+  );
+
+  const listHeadIdentity = useMemo(() => {
+    const g0 = eventsGrouped.groups[0]?.events[0];
+    if (g0) {
+      return {
+        calendarId: g0.calendarId,
+        id: g0.id,
+        startKey: g0.start?.dateTime ?? g0.start?.date ?? "",
+        dayMs: eventsGrouped.groups[0].dayMs,
+        nodate: false as const,
+      };
+    }
+    const nd = eventsGrouped.noDay[0];
+    if (nd) {
+      return {
+        calendarId: nd.calendarId,
+        id: nd.id,
+        startKey: nd.start?.dateTime ?? nd.start?.date ?? "",
+        dayMs: null,
+        nodate: true as const,
+      };
+    }
+    return null;
+  }, [eventsGrouped]);
+
+  const [eventsNowTick, setEventsNowTick] = useState(0);
+  useEffect(() => {
+    if (dashTab !== "events" || eventsRows.length === 0) return;
+    const id = window.setInterval(() => {
+      setEventsNowTick((t) => t + 1);
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [dashTab, eventsRows.length]);
+
+  void eventsNowTick;
+  const agendaNow = new Date();
 
   useEffect(() => {
     if (dashTab !== "events" || !me?.connected) return;
@@ -419,7 +862,7 @@ export default function Home() {
       ) : (
         <div className="space-y-6">
           <div
-            className="flex gap-1 rounded-lg border border-zinc-800 bg-zinc-950/50 p-1"
+            className="flex gap-8 border-b border-zinc-800/50 text-sm"
             role="tablist"
             aria-label="Dashboard sections"
           >
@@ -428,10 +871,10 @@ export default function Home() {
               role="tab"
               aria-selected={dashTab === "events"}
               onClick={() => setDashTab("events")}
-              className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+              className={`-mb-px border-b-2 pb-3 font-medium transition-colors ${
                 dashTab === "events"
-                  ? "bg-zinc-800 text-zinc-100 shadow-sm"
-                  : "text-zinc-500 hover:text-zinc-300"
+                  ? "border-zinc-100 text-zinc-100"
+                  : "border-transparent text-zinc-500 hover:text-zinc-300"
               }`}
             >
               Upcoming events
@@ -441,10 +884,10 @@ export default function Home() {
               role="tab"
               aria-selected={dashTab === "sync"}
               onClick={() => setDashTab("sync")}
-              className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+              className={`-mb-px border-b-2 pb-3 font-medium transition-colors ${
                 dashTab === "sync"
-                  ? "bg-zinc-800 text-zinc-100 shadow-sm"
-                  : "text-zinc-500 hover:text-zinc-300"
+                  ? "border-zinc-100 text-zinc-100"
+                  : "border-transparent text-zinc-500 hover:text-zinc-300"
               }`}
             >
               Sync setup
@@ -452,25 +895,15 @@ export default function Home() {
           </div>
 
           {dashTab === "events" ? (
-            <section className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
-              <div className="space-y-1">
-                <h2 className="text-sm font-medium text-zinc-200">
-                  Upcoming events (sync group)
-                </h2>
-                <p className="text-xs text-zinc-500">
-                  Only calendars you have checked under &ldquo;Calendars in sync
-                  group&rdquo; and saved. Sorted by start time. Meet links come
-                  from Google when the event has conferencing.
-                </p>
-              </div>
-              <label className="inline-flex flex-col gap-1">
+            <section className="space-y-4">
+              <label className="inline-flex w-full max-w-xs flex-col gap-1">
                 <span className="text-xs font-medium text-zinc-400">
                   Time range
                 </span>
                 <select
                   value={eventsDays}
                   onChange={(e) => setEventsDays(Number(e.target.value))}
-                  className="w-fit rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
+                  className="min-w-[11rem] rounded-md border border-zinc-800/50 bg-transparent px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
                 >
                   <option value={7}>Next 7 days</option>
                   <option value={30}>Next 30 days</option>
@@ -501,58 +934,54 @@ export default function Home() {
                 <p className="text-sm text-zinc-500">
                   {savedSyncGroupKey === ""
                     ? "No calendars in your saved sync group. Open Sync setup, check the calendars you want, and click Save selection."
-                    : "No events in this range for your selected calendars (or only cancelled items were returned)."}
+                    : "No events in this range for your selected calendars (or only cancelled or “free” items were returned)."}
                 </p>
               ) : (
-                <ul className="max-h-[28rem] space-y-4 overflow-y-auto pr-1">
-                  {eventsRows.map((ev) => (
-                    <li
-                      key={`${ev.calendarId}-${ev.id ?? ev.summary}-${formatEventSchedule(ev)}`}
-                      className="border-b border-zinc-800/80 pb-4 last:border-0 last:pb-0"
-                    >
-                      <p className="text-sm font-medium leading-snug text-zinc-100">
-                        {ev.summary?.trim() || "(No title)"}
-                      </p>
-                      <p className="mt-1 text-xs text-zinc-500">
-                        {ev.accountEmail ?? "Google account"}
-                      </p>
-                      {ev.meetingUrl ? (
-                        <p className="mt-2 text-xs leading-relaxed">
-                          <span className="text-zinc-500">Join meeting: </span>
-                          <a
-                            href={ev.meetingUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="break-all text-amber-400/90 underline-offset-2 hover:underline"
-                          >
-                            {ev.meetingUrl}
-                          </a>
-                        </p>
-                      ) : null}
-                      <p className="mt-2 text-xs text-zinc-400">
-                        {formatEventSchedule(ev)}
-                        {ev.transparency === "transparent" ? (
-                          <span className="ml-2 text-zinc-600">
-                            · shown as free
-                          </span>
-                        ) : null}
-                        {ev.htmlLink ? (
-                          <>
-                            <span className="mx-1.5 text-zinc-700">·</span>
-                            <a
-                              href={ev.htmlLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-amber-400/80 underline-offset-2 hover:underline"
-                            >
-                              Calendar
-                            </a>
-                          </>
-                        ) : null}
-                      </p>
-                    </li>
+                <div className="space-y-10">
+                  {eventsGrouped.groups.map((group) => (
+                    <div key={group.dayMs}>
+                      <h3 className="sticky top-0 z-10 -mx-1 mb-3 border-b border-zinc-800/60 bg-[var(--background)] px-1 py-2 text-xs font-medium tracking-wide text-zinc-500">
+                        {group.label}
+                      </h3>
+                      <ul className="divide-y divide-zinc-800/50">
+                        {group.events.map((ev) => (
+                          <AgendaEventRow
+                            key={`${ev.calendarId}-${ev.id ?? "noid"}-${ev.summary ?? ""}-${group.dayMs}`}
+                            ev={ev}
+                            groupDayMs={group.dayMs}
+                            isListHead={isAgendaListHead(
+                              ev,
+                              group.dayMs,
+                              listHeadIdentity
+                            )}
+                            now={agendaNow}
+                          />
+                        ))}
+                      </ul>
+                    </div>
                   ))}
-                </ul>
+                  {eventsGrouped.noDay.length > 0 ? (
+                    <div>
+                      <h3 className="sticky top-0 z-10 -mx-1 mb-3 border-b border-zinc-800/60 bg-[var(--background)] px-1 py-2 text-xs font-medium tracking-wide text-zinc-500">
+                        Other
+                      </h3>
+                      <ul className="divide-y divide-zinc-800/50">
+                        {eventsGrouped.noDay.map((ev) => (
+                          <AgendaEventRow
+                            key={`${ev.calendarId}-${ev.id ?? "noid"}-${ev.summary ?? ""}-nodate`}
+                            ev={ev}
+                            isListHead={isAgendaListHead(
+                              ev,
+                              undefined,
+                              listHeadIdentity
+                            )}
+                            now={agendaNow}
+                          />
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
               )}
               {!eventsLoading ? (
                 <p className="text-[11px] text-zinc-600">
@@ -565,7 +994,7 @@ export default function Home() {
 
           {dashTab === "sync" ? (
             <>
-          <section className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
+          <section className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-medium text-zinc-200">
                 Connected Google accounts
@@ -578,11 +1007,11 @@ export default function Home() {
                 Disconnect all
               </button>
             </div>
-            <ul className="space-y-2">
+            <ul className="divide-y divide-zinc-800/50">
               {(me.accounts ?? []).map((a) => (
                 <li
                   key={a.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-950/30 px-3 py-2"
+                  className="flex flex-wrap items-center justify-between gap-2 py-3"
                 >
                   <span className="text-sm text-zinc-200">
                     {a.email ?? "Google account"}
@@ -609,7 +1038,7 @@ export default function Home() {
             </p>
           </section>
 
-          <section className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
+          <section className="space-y-3 border-t border-zinc-800/50 pt-8">
             <h2 className="text-sm font-medium text-zinc-200">
               Calendars in sync group
             </h2>
@@ -646,7 +1075,7 @@ export default function Home() {
               </button>
             </div>
             {addOpen ? (
-              <div className="space-y-4 rounded-lg border border-zinc-700/80 bg-zinc-950/40 p-4">
+              <div className="space-y-4 border-l border-zinc-800/60 pl-4">
                 {addErr ? (
                   <p
                     className="text-xs text-red-300"
@@ -734,10 +1163,10 @@ export default function Home() {
                 </div>
               </div>
             ) : null}
-            <ul className="max-h-64 space-y-2 overflow-y-auto pr-1">
+            <ul className="divide-y divide-zinc-800/40">
               {calendars.map((c) => (
                 <li key={c.id}>
-                  <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-transparent px-2 py-1.5 hover:border-zinc-700 hover:bg-zinc-800/50">
+                  <label className="flex cursor-pointer items-start gap-3 py-3 hover:bg-zinc-900/30">
                     <input
                       type="checkbox"
                       className="mt-1"
@@ -785,7 +1214,7 @@ export default function Home() {
           </section>
 
           {lastSync ? (
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 px-4 py-3 text-sm">
+            <div className="border-t border-zinc-800/50 pt-6 text-sm">
               <p className="font-medium text-zinc-200">Last sync</p>
               <p className="mt-1 text-zinc-400">
                 Created {lastSync.created}, updated {lastSync.updated}, deleted{" "}

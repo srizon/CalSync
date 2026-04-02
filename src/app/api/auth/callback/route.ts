@@ -90,7 +90,10 @@ export async function GET(req: NextRequest) {
 
     let syncCalendarIds = prev.syncCalendarIds ?? [];
     const calendarIds = await listAllowedCalendarIds(accounts);
-    syncCalendarIds = pruneSyncCalendarIds(syncCalendarIds, calendarIds);
+    // Avoid wiping sync selection if every account failed to list (bad token, outage).
+    if (calendarIds.size > 0) {
+      syncCalendarIds = pruneSyncCalendarIds(syncCalendarIds, calendarIds);
+    }
 
     writeStore({
       version: 2,

@@ -66,14 +66,17 @@ Open [http://localhost:3000](http://localhost:3000). You will be redirected to s
 
 ### 5. Use the dashboard
 
-After you sign in, the dashboard has two areas:
+After you sign in, the dashboard uses two tabs:
 
-- **Upcoming events** — Lists events in the next 7, 30, or 90 days for calendars in your **saved** sync group only. Shows schedule, “free” transparency when Google marks the event that way, optional Meet/video links, and a link to open the event in Google Calendar.
-- **Sync setup** — Connect or disconnect Google accounts, pick **Calendars in sync group** (choose at least two writable calendars you want kept in sync), **Save selection**, then **Run sync now** (or rely on push/polling if configured).
+- **Upcoming events** (default) — Lists events in the next 7, 30, or 90 days for calendars in your **saved** sync group only. Shows schedule, “free” transparency when Google marks the event that way, optional Meet/video links, and a link to open the event in Google Calendar.
+- **Sync setup** — Manage Google accounts and the sync group:
+  - **Connected Google accounts** — Add another account, remove one, or **Disconnect all**. Calendars from every linked account appear in one list; busy blocks can sync across different Google logins.
+  - **Calendars in sync group** — Check at least two calendars that should both publish and receive busy mirrors. Each calendar must be writable (owner or “Make changes to events”) on at least one connected account. Use **Add calendar** to **Create** a new calendar (optionally choose which account owns it when you have several) or **Add to list** with an existing calendar ID from Google Calendar → Settings → Integrate calendar. Then **Save selection** and **Run sync now**, or rely on HTTPS push notifications and optional polling (see [Configure environment variables](#3-configure-environment-variables)).
+  - After a sync, **Last sync** shows created/updated/deleted mirror counts, how many event rows Google returned, and (when relevant) why some events were skipped (e.g. “Show as available”, existing CalSync mirrors, cancelled events).
 
 Refresh tokens and preferences are written to `.data/store.json` on this machine. Include `.data/` in backups if you move servers.
 
-**API (optional):** Authenticated sessions can call `GET /api/events?days=30` (1–90) for JSON of the same upcoming-events window used by the dashboard.
+**API (optional):** Authenticated sessions can call `GET /api/events?days=30` (1–90) for JSON of the same upcoming-events window used by the dashboard. You can also trigger a sync with `POST /api/sync` (same session cookie) or from automation if you expose it appropriately.
 
 ### 6. Production build (optional)
 
@@ -88,11 +91,13 @@ Ensure `CALSYNC_PUBLIC_URL` matches the URL users use (HTTPS for Google Calendar
 
 | Command | Purpose |
 |---------|---------|
-| `npm run dev` | Development server |
-| `npm run build` | Production build |
+| `npm run dev` | Development server (Turbopack) |
+| `npm run dev:webpack` | Development server using Webpack |
+| `npm run build` | Production build (Turbopack) |
+| `npm run build:webpack` | Production build using Webpack |
 | `npm run start` | Run production server |
 | `npm run lint` | ESLint |
 
 ## Tech stack
 
-This is a [Next.js](https://nextjs.org/) app (App Router) using the [Google Calendar API](https://developers.google.com/calendar) via `googleapis`.
+[Next.js](https://nextjs.org/) 16 (App Router), [React](https://react.dev/) 19, [Tailwind CSS](https://tailwindcss.com/) 4, and the [Google Calendar API](https://developers.google.com/calendar) via `googleapis`.

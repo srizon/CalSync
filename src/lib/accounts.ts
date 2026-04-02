@@ -8,18 +8,26 @@ export async function listAllowedCalendarIds(
 ): Promise<Set<string>> {
   const allowed = new Set<string>();
   for (const acc of accounts) {
-    const cal = getCalendarClient(acc.refreshToken);
-    let pageToken: string | undefined;
-    do {
-      const res = await cal.calendarList.list({
-        maxResults: 250,
-        pageToken,
-      });
-      for (const c of res.data.items ?? []) {
-        if (c.id) allowed.add(c.id);
-      }
-      pageToken = res.data.nextPageToken ?? undefined;
-    } while (pageToken);
+    try {
+      const cal = getCalendarClient(acc.refreshToken);
+      let pageToken: string | undefined;
+      do {
+        const res = await cal.calendarList.list({
+          maxResults: 250,
+          pageToken,
+        });
+        for (const c of res.data.items ?? []) {
+          if (c.id) allowed.add(c.id);
+        }
+        pageToken = res.data.nextPageToken ?? undefined;
+      } while (pageToken);
+    } catch (e) {
+      const label = acc.email ?? acc.id;
+      console.error(
+        `[CalSync] calendarList.list failed for account ${label}:`,
+        e instanceof Error ? e.message : e
+      );
+    }
   }
   return allowed;
 }

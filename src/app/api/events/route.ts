@@ -42,8 +42,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "not_connected" }, { status: 401 });
   }
 
-  let days = Number(req.nextUrl.searchParams.get("days") ?? "30");
-  if (!Number.isFinite(days) || days < 1) days = 30;
+  let days = Number(req.nextUrl.searchParams.get("days") ?? "7");
+  if (!Number.isFinite(days) || days < 1) days = 7;
   days = Math.min(Math.floor(days), MAX_RANGE_DAYS);
 
   const directory = await listCalendarsMerged(s);
@@ -88,6 +88,7 @@ export async function GET(req: NextRequest) {
       const visible = items.filter(
         (ev) =>
           ev.status !== "cancelled" &&
+          ev.transparency !== "transparent" &&
           !ev.extendedProperties?.private?.[CALSYNC_SOURCE_KEY]
       );
       for (const ev of visible) {
