@@ -301,6 +301,51 @@ function allDayActiveNow(ev: ListedEvent, now: Date): boolean {
   return now0 >= startDay && now0 < endExclusive;
 }
 
+/** When the event is fully over (timed: end datetime; all-day: exclusive end date at local midnight). */
+function eventEndInstantMs(ev: ListedEvent): number | null {
+  const timed = eventTimedBounds(ev);
+  if (timed) return timed.end;
+  const s = ev.start;
+  if (s?.date && !s.dateTime) {
+    if (ev.end?.date) {
+      return startOfLocalDay(parseGCalDate(ev.end.date));
+    }
+    return startOfLocalDay(parseGCalDate(s.date)) + 86_400_000;
+  }
+  if (s?.dateTime && ev.end?.dateTime) {
+    const startMs = new Date(s.dateTime).getTime();
+    const endMs = new Date(ev.end.dateTime).getTime();
+    if (!Number.isNaN(startMs) && !Number.isNaN(endMs) && endMs > startMs) {
+      return endMs;
+    }
+  }
+  return null;
+}
+
+function eventHasEnded(ev: ListedEvent, now: Date): boolean {
+  const endMs = eventEndInstantMs(ev);
+  if (endMs == null) return false;
+  return now.getTime() >= endMs;
+}
+
+/** Badge color from time remaining until start (upcoming) or until end (live). */
+function listHeadBadgeTone(remainingMs: number): "gray" | "green" | "yellow" | "red" {
+  if (remainingMs >= 3_600_000) return "gray";
+  if (remainingMs >= 30 * 60_000) return "green";
+  if (remainingMs >= 10 * 60_000) return "yellow";
+  return "red";
+}
+
+const LIST_HEAD_BADGE_TONE_CLASS: Record<
+  ReturnType<typeof listHeadBadgeTone>,
+  string
+> = {
+  gray: "bg-zinc-800/70 text-zinc-400",
+  green: "bg-emerald-950/60 text-emerald-300",
+  yellow: "bg-yellow-950/55 text-yellow-200",
+  red: "bg-red-950/55 text-red-300",
+};
+
 function formatStartsIn(ms: number): string {
   if (ms < 60_000) return "Starting soon";
   if (ms < 3_600_000) {
@@ -323,9 +368,9 @@ function formatStartsIn(ms: number): string {
 }
 
 type ListHeadStatus =
-  | { type: "live_timed"; remainingMin: number }
+  | { type: "live_timed"; remainingMin: number; remainingMs: number }
   | { type: "live_allday" }
-  | { type: "upcoming"; label: string };
+  | { type: "upcoming"; label: string; remainingMs?: number };
 
 function computeListHeadStatus(ev: ListedEvent, now: Date): ListHeadStatus | null {
   const t = now.getTime();
@@ -333,10 +378,15 @@ function computeListHeadStatus(ev: ListedEvent, now: Date): ListHeadStatus | nul
   if (bounds) {
     if (t >= bounds.end) return null;
     if (t >= bounds.start) {
-      const remainingMin = Math.max(1, Math.ceil((bounds.end - t) / 60_000));
-      return { type: "live_timed", remainingMin };
+      const remainingMs = bounds.end - t;
+      const remainingMin = Math.max(1, Math.ceil(remainingMs / 60_000));
+      return { type: "live_timed", remainingMin, remainingMs };
     }
-    return { type: "upcoming", label: formatStartsIn(bounds.start - t) };
+    return {
+      type: "upcoming",
+      label: formatStartsIn(bounds.start - t),
+      remainingMs: bounds.start - t,
+    };
   }
   if (allDayActiveNow(ev, now)) {
     return { type: "live_allday" };
@@ -382,10 +432,17 @@ function listHeadTagText(status: ListHeadStatus): string {
 }
 
 function ListHeadTag({ status }: { status: ListHeadStatus }) {
+  let tone: keyof typeof LIST_HEAD_BADGE_TONE_CLASS = "gray";
+  if (status.type === "live_timed") {
+    tone = listHeadBadgeTone(status.remainingMs);
+  } else if (status.type === "upcoming" && status.remainingMs != null) {
+    tone = listHeadBadgeTone(status.remainingMs);
+  }
+  const toneClass = LIST_HEAD_BADGE_TONE_CLASS[tone];
   return (
     <span
       role="status"
-      className="inline-flex shrink-0 items-center rounded-full bg-zinc-800/70 px-2.5 py-0.5 text-[11px] font-medium text-zinc-400"
+      className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium ${toneClass}`}
     >
       {listHeadTagText(status)}
     </span>
@@ -602,9 +659,20 @@ export default function Home() {
     [me?.syncCalendarIds]
   );
 
+  const [eventsNowTick, setEventsNowTick] = useState(0);
+  const agendaNow = useMemo(() => {
+    void eventsNowTick;
+    return new Date();
+  }, [eventsNowTick]);
+
+  const visibleEventRows = useMemo(
+    () => eventsRows.filter((ev) => !eventHasEnded(ev, agendaNow)),
+    [eventsRows, agendaNow]
+  );
+
   const eventsGrouped = useMemo(
-    () => groupEventsByLocalDay(eventsRows),
-    [eventsRows]
+    () => groupEventsByLocalDay(visibleEventRows),
+    [visibleEventRows]
   );
 
   const listHeadIdentity = useMemo(() => {
@@ -631,7 +699,6 @@ export default function Home() {
     return null;
   }, [eventsGrouped]);
 
-  const [eventsNowTick, setEventsNowTick] = useState(0);
   useEffect(() => {
     if (dashTab !== "events" || eventsRows.length === 0) return;
     const id = window.setInterval(() => {
@@ -640,8 +707,21 @@ export default function Home() {
     return () => window.clearInterval(id);
   }, [dashTab, eventsRows.length]);
 
-  void eventsNowTick;
-  const agendaNow = new Date();
+  useEffect(() => {
+    if (dashTab !== "events" || eventsRows.length === 0) return;
+    const nowMs = Date.now();
+    let nextEnd = Infinity;
+    for (const ev of eventsRows) {
+      const end = eventEndInstantMs(ev);
+      if (end != null && end > nowMs) nextEnd = Math.min(nextEnd, end);
+    }
+    if (!Number.isFinite(nextEnd)) return;
+    const delay = Math.max(0, nextEnd - nowMs) + 250;
+    const id = window.setTimeout(() => {
+      setEventsNowTick((t) => t + 1);
+    }, delay);
+    return () => window.clearTimeout(id);
+  }, [dashTab, eventsRows, eventsNowTick]);
 
   useEffect(() => {
     if (dashTab !== "events" || !me?.connected) return;
@@ -914,11 +994,13 @@ export default function Home() {
               ) : null}
               {eventsLoading ? (
                 <p className="text-sm text-zinc-500">Loading events…</p>
-              ) : eventsRows.length === 0 ? (
+              ) : visibleEventRows.length === 0 ? (
                 <p className="text-sm text-zinc-500">
-                  {savedSyncGroupKey === ""
-                    ? "No calendars in your saved sync group. Open Settings, check the calendars you want, and click Save selection."
-                    : "No events in this range for your selected calendars (or only cancelled or “free” items were returned)."}
+                  {eventsRows.length === 0
+                    ? savedSyncGroupKey === ""
+                      ? "No calendars in your saved sync group. Open Settings, check the calendars you want, and click Save selection."
+                      : "No events in this range for your selected calendars (or only cancelled or “free” items were returned)."
+                    : "Nothing scheduled right now. Earlier events in this range have ended."}
                 </p>
               ) : (
                 <div className="space-y-10">
@@ -967,10 +1049,14 @@ export default function Home() {
                   ) : null}
                 </div>
               )}
-              {!eventsLoading ? (
+              {!eventsLoading && eventsRows.length > 0 ? (
                 <p className="text-[11px] text-zinc-600">
-                  {eventsRows.length} event
-                  {eventsRows.length === 1 ? "" : "s"} in the selected window.
+                  {visibleEventRows.length} event
+                  {visibleEventRows.length === 1 ? "" : "s"} on your agenda
+                  {eventsRows.length > visibleEventRows.length
+                    ? ` (${eventsRows.length - visibleEventRows.length} already ended in this range)`
+                    : ""}
+                  .
                 </p>
               ) : null}
             </section>

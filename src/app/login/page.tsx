@@ -1,14 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 
-export default function LoginPage() {
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    setError(p.get("error"));
-  }, []);
+function LoginContent() {
+  const searchParams = useSearchParams();
+  const error = searchParams.get("error");
 
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-8 px-4 py-12">
@@ -47,5 +44,36 @@ export default function LoginPage() {
         in <code className="text-zinc-500">.env.local</code>.
       </p>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-8 px-4 py-12">
+          <header className="space-y-2 text-center">
+            <h1 className="text-2xl font-semibold tracking-tight text-white">
+              CalSync
+            </h1>
+            <p className="text-sm leading-relaxed text-zinc-400">
+              Sign in with Google to open the dashboard. Calendar access is
+              requested so CalSync can sync busy times across your connected
+              accounts.
+            </p>
+          </header>
+          <div className="flex justify-center">
+            <a
+              href="/api/auth/google"
+              className="inline-flex items-center justify-center rounded-lg bg-white px-5 py-2.5 text-sm font-medium text-zinc-900 hover:bg-zinc-200"
+            >
+              Continue with Google
+            </a>
+          </div>
+        </main>
+      }
+    >
+      <LoginContent />
+    </Suspense>
   );
 }

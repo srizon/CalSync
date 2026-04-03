@@ -110,6 +110,8 @@ Ensure `CALSYNC_PUBLIC_URL` matches the URL users use (HTTPS for Google Calendar
 - **Clear mirrors:** Per-calendar control on Sync setup (and the clear-mirrors API) deletes CalSync mirror events over a wide past range plus the normal forward window; your own non-mirror events are untouched.
 - **Sync cleanup:** Duplicate CalSync mirrors on the same target (same mirror key) are deleted during sync.
 - **UI:** Calendar create/add flows were removed from the home page in favor of managing the sync group and calendars in Google Calendar / settings.
+- **Agenda:** The upcoming-events list hides items that have already ended (timed and all-day); the view refreshes when the next event in range ends. List-head badges use urgency colors (calm → urgent) from time until start or, for live timed events, time until end. The footer shows how many events are still on the agenda versus how many in the window already ended, with a clear empty state when everything in range is past.
+- **Login:** OAuth error text from the query string is read with `useSearchParams` inside a `Suspense` boundary so static generation and ESLint stay clean.
 
 ## Tech stack
 
