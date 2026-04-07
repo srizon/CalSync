@@ -920,6 +920,31 @@ export default function Home() {
     return null;
   }, [expandedGrouped]);
 
+  const calendarsByAccount = useMemo(() => {
+    const byAcc = new Map<string, Cal[]>();
+    for (const c of calendars) {
+      const list = byAcc.get(c.accountId);
+      if (list) list.push(c);
+      else byAcc.set(c.accountId, [c]);
+    }
+    const groups = Array.from(byAcc.entries()).map(([accountId, cals]) => {
+      const sorted = [...cals].sort((a, b) => {
+        const ap = a.primary ? 1 : 0;
+        const bp = b.primary ? 1 : 0;
+        if (bp !== ap) return bp - ap;
+        return a.summary.localeCompare(b.summary);
+      });
+      const accountLabel = sorted[0]?.accountEmail ?? "Google account";
+      return { accountId, accountLabel, calendars: sorted };
+    });
+    groups.sort((a, b) =>
+      a.accountLabel.localeCompare(b.accountLabel, undefined, {
+        sensitivity: "base",
+      })
+    );
+    return groups;
+  }, [calendars]);
+
   useEffect(() => {
     if (dashTab !== "events" || eventsRows.length === 0) return;
     const id = window.setInterval(() => {
@@ -1359,50 +1384,53 @@ export default function Home() {
                 {clearMirrorsNote}
               </p>
             ) : null}
-            <ul className="divide-y divide-zinc-800/40">
-              {calendars.map((c) => (
-                <li key={c.id}>
-                  <div className="flex flex-wrap items-start justify-between gap-2 py-3 hover:bg-zinc-900/30">
-                    <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
-                      <input
-                        type="checkbox"
-                        className="mt-1"
-                        checked={selected.has(c.id)}
-                        onChange={() => toggle(c.id)}
-                      />
-                      <span className="text-sm">
-                        <span className="text-zinc-100">{c.summary}</span>
-                        {c.primary ? (
-                          <span className="ml-2 text-xs text-amber-400/90">
-                            primary
-                          </span>
-                        ) : null}
-                        {c.accountEmail ? (
-                          <span className="ml-2 text-xs text-zinc-500">
-                            · {c.accountEmail}
-                          </span>
-                        ) : null}
-                        <span className="mt-0.5 block font-mono text-[11px] text-zinc-600">
-                          {c.id}
-                        </span>
-                      </span>
-                    </label>
-                    <button
-                      type="button"
-                      disabled={clearMirrorsBusy === c.id}
-                      onClick={() =>
-                        void clearMirrorsForCalendar(c.id, c.summary)
-                      }
-                      className="shrink-0 text-xs text-zinc-500 underline-offset-4 hover:text-zinc-300 hover:underline disabled:opacity-50"
-                    >
-                      {clearMirrorsBusy === c.id
-                        ? "Clearing…"
-                        : "Clear mirrors"}
-                    </button>
-                  </div>
-                </li>
+            <div className="space-y-6">
+              {calendarsByAccount.map((g) => (
+                <div key={g.accountId}>
+                  <p className="mb-2 text-xs font-medium text-zinc-500">
+                    {g.accountLabel}
+                  </p>
+                  <ul className="divide-y divide-zinc-800/40">
+                    {g.calendars.map((c) => (
+                      <li key={c.id}>
+                        <div className="flex flex-wrap items-start justify-between gap-2 py-3 hover:bg-zinc-900/30">
+                          <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
+                            <input
+                              type="checkbox"
+                              className="mt-1"
+                              checked={selected.has(c.id)}
+                              onChange={() => toggle(c.id)}
+                            />
+                            <span className="text-sm">
+                              <span className="text-zinc-100">
+                                {c.summary}
+                              </span>
+                              {c.primary ? (
+                                <span className="ml-2 text-xs text-amber-400/90">
+                                  primary
+                                </span>
+                              ) : null}
+                            </span>
+                          </label>
+                          <button
+                            type="button"
+                            disabled={clearMirrorsBusy === c.id}
+                            onClick={() =>
+                              void clearMirrorsForCalendar(c.id, c.summary)
+                            }
+                            className="shrink-0 text-xs text-zinc-500 underline-offset-4 hover:text-zinc-300 hover:underline disabled:opacity-50"
+                          >
+                            {clearMirrorsBusy === c.id
+                              ? "Clearing…"
+                              : "Clear mirrors"}
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+            </div>
             <div className="flex flex-wrap gap-2 pt-2">
               <button
                 type="button"
