@@ -36,6 +36,8 @@ type ListedEvent = {
   htmlLink: string | null;
   transparency: string | null;
   meetingUrl: string | null;
+  /** True when your RSVP on this copy is Declined. */
+  declinedBySelf?: boolean;
 };
 
 function startOfLocalDay(d: Date): number {
@@ -408,7 +410,25 @@ function computeListHeadStatus(ev: ListedEvent, now: Date): ListHeadStatus | nul
   return null;
 }
 
-function MeetingJoinLink({ url }: { url: string }) {
+function MeetingJoinLink({
+  url,
+  mutedOutline,
+}: {
+  url: string;
+  mutedOutline?: boolean;
+}) {
+  if (mutedOutline) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center justify-center rounded-md border border-zinc-600/80 bg-transparent px-3 py-2 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-500"
+      >
+        {joinMeetingLabel(url)}
+      </a>
+    );
+  }
   return (
     <a
       href={url}
@@ -431,14 +451,22 @@ function listHeadTagText(status: ListHeadStatus): string {
   return status.label;
 }
 
-function ListHeadTag({ status }: { status: ListHeadStatus }) {
+function ListHeadTag({
+  status,
+  muted,
+}: {
+  status: ListHeadStatus;
+  muted?: boolean;
+}) {
   let tone: keyof typeof LIST_HEAD_BADGE_TONE_CLASS = "gray";
   if (status.type === "live_timed") {
     tone = listHeadBadgeTone(status.remainingMs);
   } else if (status.type === "upcoming" && status.remainingMs != null) {
     tone = listHeadBadgeTone(status.remainingMs);
   }
-  const toneClass = LIST_HEAD_BADGE_TONE_CLASS[tone];
+  const toneClass = muted
+    ? "border border-zinc-600/70 bg-zinc-900/60 text-zinc-500"
+    : LIST_HEAD_BADGE_TONE_CLASS[tone];
   return (
     <span
       role="status"
@@ -454,47 +482,106 @@ function AgendaEventRow({
   groupDayMs,
   isListHead,
   now,
+  declinedHidden,
+  isFirstInAgenda,
 }: {
   ev: ListedEvent;
   groupDayMs?: number;
   isListHead: boolean;
   now: Date;
+  declinedHidden: boolean;
+  isFirstInAgenda: boolean;
 }) {
   const timeLabel =
     groupDayMs != null
       ? formatEventTimeInDay(ev, groupDayMs)
       : formatEventSchedule(ev);
   const headStatus = isListHead ? computeListHeadStatus(ev, now) : null;
-  return (
-    <li className="py-5 first:pt-0">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-        <div className="min-w-0 flex-1 space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <EventTitle ev={ev} />
-            {headStatus ? <ListHeadTag status={headStatus} /> : null}
-          </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
-            <span className="inline-flex items-center gap-1.5">
-              <IconClock className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
-              <span className="text-zinc-400">{timeLabel}</span>
+  const declined = Boolean(ev.declinedBySelf);
+  const muted = declined;
+
+  const inner = (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <EventTitle ev={ev} muted={muted} />
+          {declined ? (
+            <span className="inline-flex shrink-0 items-center rounded-full border border-zinc-600/60 bg-zinc-900/40 px-2 py-0.5 text-[11px] font-medium text-zinc-500">
+              Declined
             </span>
-            <span className="text-zinc-600">·</span>
-            <span
-              className="inline-flex max-w-full items-center gap-1.5 text-[11px] text-zinc-500"
-              title={ev.calendarSummary}
-            >
-              <IconCalendar className="h-3 w-3 shrink-0 text-zinc-600" />
-              <span className="truncate">{ev.calendarSummary}</span>
-            </span>
-          </div>
-          {showAccountEmailBelow(ev) ? (
-            <p className="text-[11px] text-zinc-600">
-              {ev.accountEmail ?? "Google account"}
-            </p>
+          ) : null}
+          {headStatus ? (
+            <ListHeadTag status={headStatus} muted={muted} />
           ) : null}
         </div>
-        <div className="flex shrink-0 flex-col gap-2 sm:min-w-[10.5rem] sm:items-end">
-          {ev.meetingUrl ? <MeetingJoinLink url={ev.meetingUrl} /> : null}
+        <div
+          className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-xs ${muted ? "text-zinc-600" : "text-zinc-500"}`}
+        >
+          <span className="inline-flex items-center gap-1.5">
+            <IconClock
+              className={`h-3.5 w-3.5 shrink-0 ${muted ? "text-zinc-700" : "text-zinc-600"}`}
+            />
+            <span className={muted ? "text-zinc-500" : "text-zinc-400"}>
+              {timeLabel}
+            </span>
+          </span>
+          <span className={muted ? "text-zinc-700" : "text-zinc-600"}>·</span>
+          <span
+            className={`inline-flex max-w-full items-center gap-1.5 text-[11px] ${muted ? "text-zinc-600" : "text-zinc-500"}`}
+            title={ev.calendarSummary}
+          >
+            <IconCalendar
+              className={`h-3 w-3 shrink-0 ${muted ? "text-zinc-700" : "text-zinc-600"}`}
+            />
+            <span className="truncate">{ev.calendarSummary}</span>
+          </span>
+        </div>
+        {showAccountEmailBelow(ev) ? (
+          <p
+            className={`text-[11px] ${muted ? "text-zinc-600/90" : "text-zinc-600"}`}
+          >
+            {ev.accountEmail ?? "Google account"}
+          </p>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 flex-col gap-2 sm:min-w-[10.5rem] sm:items-end">
+        {ev.meetingUrl ? (
+          <MeetingJoinLink url={ev.meetingUrl} mutedOutline={muted} />
+        ) : null}
+      </div>
+    </div>
+  );
+
+  const padY = isFirstInAgenda ? "pt-0 pb-5 sm:pb-5" : "py-5";
+
+  if (!declined) {
+    return (
+      <li
+        className={`border-b border-zinc-800/50 ${padY} motion-reduce:transition-none`}
+      >
+        {inner}
+      </li>
+    );
+  }
+
+  return (
+    <li
+      className={`grid min-h-0 border-zinc-800/50 transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${
+        declinedHidden
+          ? "grid-rows-[0fr] border-b-0"
+          : "grid-rows-[1fr] border-b"
+      }`}
+      aria-hidden={declinedHidden}
+    >
+      <div className="min-h-0 overflow-hidden">
+        <div
+          className={`${padY} transition-opacity duration-200 ease-out motion-reduce:transition-none ${
+            declinedHidden
+              ? "pointer-events-none opacity-0"
+              : "opacity-100"
+          }`}
+        >
+          {inner}
         </div>
       </div>
     </li>
@@ -559,21 +646,101 @@ function showAccountEmailBelow(ev: ListedEvent): boolean {
   return true;
 }
 
-function EventTitle({ ev }: { ev: ListedEvent }) {
+function EventTitle({ ev, muted }: { ev: ListedEvent; muted?: boolean }) {
   const text = ev.summary?.trim() || "(No title)";
   const base = "text-[15px] font-medium leading-snug";
   if (!ev.htmlLink) {
-    return <p className={`${base} text-zinc-50`}>{text}</p>;
+    return (
+      <p
+        className={`${base} max-w-full ${muted ? "inline-block w-fit text-zinc-500" : "text-zinc-50"}`}
+      >
+        {text}
+      </p>
+    );
   }
   return (
     <a
       href={ev.htmlLink}
       target="_blank"
       rel="noopener noreferrer"
-      className={`${base} block w-fit text-zinc-50 decoration-zinc-600 underline-offset-2 hover:text-white hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-500`}
+      className={`${base} block w-fit max-w-full underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-500 ${
+        muted
+          ? "text-zinc-500 decoration-zinc-700 transition-colors duration-150 hover:bg-zinc-900/50 hover:text-zinc-400 hover:underline"
+          : "text-zinc-50 decoration-zinc-600 hover:text-white hover:underline"
+      }`}
     >
       {text}
     </a>
+  );
+}
+
+function EventsAgendaSkeleton() {
+  const bar =
+    "animate-pulse rounded-md bg-zinc-800/50 motion-reduce:animate-none";
+  return (
+    <div
+      className="space-y-10"
+      aria-busy="true"
+      aria-live="polite"
+      aria-label="Loading events"
+    >
+      {[0, 1].map((group) => (
+        <div key={group}>
+          <div className={`mb-3 h-3.5 w-28 ${bar}`} />
+          <ul className="flex flex-col">
+            {[0, 1, 2].map((row) => (
+              <li key={row} className="border-b border-zinc-800/50 py-5">
+                <div className="space-y-2.5">
+                  <div className={`h-4 max-w-sm ${bar}`} />
+                  <div className={`h-3 max-w-[14rem] ${bar}`} />
+                  <div className={`h-3 max-w-[10rem] ${bar}`} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DeclinedEventsSwitch({
+  show,
+  onShowChange,
+}: {
+  show: boolean;
+  onShowChange: (next: boolean) => void;
+}) {
+  const id = "dash-show-declined";
+  return (
+    <div className="inline-flex flex-col gap-1">
+      <span className="text-xs font-medium text-zinc-400" id={`${id}-label`}>
+        Declined events
+      </span>
+      <div className="flex min-h-10 items-center">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={show}
+          aria-labelledby={`${id}-label`}
+          onClick={() => onShowChange(!show)}
+          className={`flex h-8 w-14 shrink-0 items-center rounded-full border p-1 transition-colors duration-200 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 motion-reduce:transition-none ${
+            show
+              ? "border-sky-600/90 bg-sky-600/90 hover:border-sky-500 hover:bg-sky-500 focus-visible:outline-sky-400"
+              : "border-zinc-700 bg-zinc-900 focus-visible:outline-zinc-400"
+          }`}
+        >
+          <span
+            className={`pointer-events-none h-6 w-6 shrink-0 rounded-full shadow-sm transition-transform duration-200 ease-out motion-reduce:transition-none ${
+              show
+                ? "translate-x-6 bg-white"
+                : "translate-x-0 bg-zinc-100"
+            }`}
+            aria-hidden
+          />
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -602,6 +769,7 @@ export default function Home() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [dashTab, setDashTab] = useState<"sync" | "events">("events");
   const [eventsDays, setEventsDays] = useState(7);
+  const [showDeclinedEvents, setShowDeclinedEvents] = useState(false);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsErr, setEventsErr] = useState<string | null>(null);
   const [eventsRows, setEventsRows] = useState<ListedEvent[]>([]);
@@ -659,6 +827,46 @@ export default function Home() {
     [me?.syncCalendarIds]
   );
 
+  const loadEvents = useCallback(
+    async (opts?: { silent?: boolean; signal?: AbortSignal }) => {
+      const silent = opts?.silent ?? false;
+      const signal = opts?.signal;
+      if (!me?.connected) return;
+      if (!silent) {
+        setEventsLoading(true);
+        setEventsErr(null);
+        setEventsLoadWarnings([]);
+      }
+      try {
+        const qs = new URLSearchParams({ days: String(eventsDays) });
+        const r = await fetch(`/api/events?${qs.toString()}`, { signal });
+        const j = (await r.json()) as {
+          events?: ListedEvent[];
+          loadErrors?: string[];
+          error?: string;
+          message?: string;
+        };
+        if (signal?.aborted) return;
+        if (!r.ok) {
+          throw new Error(j.message || j.error || r.statusText);
+        }
+        setEventsRows(j.events ?? []);
+        setEventsLoadWarnings(j.loadErrors ?? []);
+        if (!silent) setEventsErr(null);
+      } catch (e) {
+        if (e instanceof Error && e.name === "AbortError") return;
+        if (!silent) {
+          setEventsErr(e instanceof Error ? e.message : String(e));
+          setEventsRows([]);
+          setEventsLoadWarnings([]);
+        }
+      } finally {
+        if (!silent) setEventsLoading(false);
+      }
+    },
+    [eventsDays, me?.connected]
+  );
+
   const [eventsNowTick, setEventsNowTick] = useState(0);
   const agendaNow = useMemo(() => {
     void eventsNowTick;
@@ -670,23 +878,36 @@ export default function Home() {
     [eventsRows, agendaNow]
   );
 
+  const expandedVisibleEventRows = useMemo(
+    () =>
+      visibleEventRows.filter(
+        (ev) => !ev.declinedBySelf || showDeclinedEvents
+      ),
+    [visibleEventRows, showDeclinedEvents]
+  );
+
   const eventsGrouped = useMemo(
     () => groupEventsByLocalDay(visibleEventRows),
     [visibleEventRows]
   );
 
+  const expandedGrouped = useMemo(
+    () => groupEventsByLocalDay(expandedVisibleEventRows),
+    [expandedVisibleEventRows]
+  );
+
   const listHeadIdentity = useMemo(() => {
-    const g0 = eventsGrouped.groups[0]?.events[0];
+    const g0 = expandedGrouped.groups[0]?.events[0];
     if (g0) {
       return {
         calendarId: g0.calendarId,
         id: g0.id,
         startKey: g0.start?.dateTime ?? g0.start?.date ?? "",
-        dayMs: eventsGrouped.groups[0].dayMs,
+        dayMs: expandedGrouped.groups[0].dayMs,
         nodate: false as const,
       };
     }
-    const nd = eventsGrouped.noDay[0];
+    const nd = expandedGrouped.noDay[0];
     if (nd) {
       return {
         calendarId: nd.calendarId,
@@ -697,7 +918,7 @@ export default function Home() {
       };
     }
     return null;
-  }, [eventsGrouped]);
+  }, [expandedGrouped]);
 
   useEffect(() => {
     if (dashTab !== "events" || eventsRows.length === 0) return;
@@ -725,39 +946,19 @@ export default function Home() {
 
   useEffect(() => {
     if (dashTab !== "events" || !me?.connected) return;
-    let cancelled = false;
-    setEventsLoading(true);
-    setEventsErr(null);
-    setEventsLoadWarnings([]);
-    void (async () => {
-      try {
-        const r = await fetch(`/api/events?days=${eventsDays}`);
-        const j = (await r.json()) as {
-          events?: ListedEvent[];
-          loadErrors?: string[];
-          error?: string;
-          message?: string;
-        };
-        if (cancelled) return;
-        if (!r.ok) {
-          throw new Error(j.message || j.error || r.statusText);
-        }
-        setEventsRows(j.events ?? []);
-        setEventsLoadWarnings(j.loadErrors ?? []);
-      } catch (e) {
-        if (!cancelled) {
-          setEventsErr(e instanceof Error ? e.message : String(e));
-          setEventsRows([]);
-          setEventsLoadWarnings([]);
-        }
-      } finally {
-        if (!cancelled) setEventsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [dashTab, eventsDays, me?.connected, savedSyncGroupKey]);
+    const ac = new AbortController();
+    void loadEvents({ silent: false, signal: ac.signal });
+    return () => ac.abort();
+  }, [dashTab, eventsDays, me?.connected, savedSyncGroupKey, loadEvents]);
+
+  useEffect(() => {
+    if (dashTab !== "events" || !me?.connected) return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void loadEvents({ silent: true });
+    }, 60_000);
+    return () => window.clearInterval(id);
+  }, [dashTab, me?.connected, loadEvents]);
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -782,6 +983,7 @@ export default function Home() {
         throw new Error((j as { error?: string }).error || r.statusText);
       }
       await refresh();
+      window.setTimeout(() => void loadEvents({ silent: true }), 4000);
     } catch (e) {
       setLoadErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -803,6 +1005,7 @@ export default function Home() {
         );
       }
       setLastSync(j as typeof lastSync);
+      void loadEvents({ silent: true });
     } catch (e) {
       setLastSync({
         created: 0,
@@ -864,6 +1067,7 @@ export default function Home() {
           ? `Removed ${n} mirror block(s); some errors: ${errList.join("; ")}`
           : `Removed ${n} mirror block${n === 1 ? "" : "s"} from “${summary}”.`
       );
+      void loadEvents({ silent: true });
     } catch (e) {
       setClearMirrorsNote(
         e instanceof Error ? e.message : String(e)
@@ -960,20 +1164,32 @@ export default function Home() {
 
           {dashTab === "events" ? (
             <section className="space-y-4">
-              <label className="inline-flex w-full max-w-xs flex-col gap-1">
-                <span className="text-xs font-medium text-zinc-400">
-                  Time range
-                </span>
-                <select
-                  value={eventsDays}
-                  onChange={(e) => setEventsDays(Number(e.target.value))}
-                  className="min-w-[11rem] rounded-md border border-zinc-800/50 bg-transparent px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
-                >
-                  <option value={7}>Next 7 days</option>
-                  <option value={30}>Next 30 days</option>
-                  <option value={90}>Next 90 days</option>
-                </select>
-              </label>
+              <div className="flex flex-wrap items-end gap-6 gap-y-3">
+                <label className="inline-flex w-full max-w-xs flex-col gap-1">
+                  <span className="text-xs font-medium text-zinc-400">
+                    Time range
+                  </span>
+                  <select
+                    value={eventsDays}
+                    onChange={(e) => setEventsDays(Number(e.target.value))}
+                    className="min-w-[11rem] appearance-none rounded-md border border-zinc-800/50 bg-transparent py-2 pl-3 pr-10 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                    style={{
+                      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")`,
+                      backgroundSize: "1.125rem",
+                      backgroundPosition: "right 0.65rem center",
+                      backgroundRepeat: "no-repeat",
+                    }}
+                  >
+                    <option value={7}>Next 7 days</option>
+                    <option value={30}>Next 30 days</option>
+                    <option value={90}>Next 90 days</option>
+                  </select>
+                </label>
+                <DeclinedEventsSwitch
+                  show={showDeclinedEvents}
+                  onShowChange={setShowDeclinedEvents}
+                />
+              </div>
               {eventsErr ? (
                 <p
                   className="rounded-lg border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-200"
@@ -993,24 +1209,26 @@ export default function Home() {
                 </ul>
               ) : null}
               {eventsLoading ? (
-                <p className="text-sm text-zinc-500">Loading events…</p>
-              ) : visibleEventRows.length === 0 ? (
+                <EventsAgendaSkeleton />
+              ) : expandedVisibleEventRows.length === 0 ? (
                 <p className="text-sm text-zinc-500">
                   {eventsRows.length === 0
                     ? savedSyncGroupKey === ""
                       ? "No calendars in your saved sync group. Open Settings, check the calendars you want, and click Save selection."
                       : "No events in this range for your selected calendars (or only cancelled or “free” items were returned)."
-                    : "Nothing scheduled right now. Earlier events in this range have ended."}
+                    : visibleEventRows.length > 0 && !showDeclinedEvents
+                      ? "Declined events are hidden. Turn on Declined events to see them in the list."
+                      : "Nothing scheduled right now. Earlier events in this range have ended."}
                 </p>
               ) : (
                 <div className="space-y-10">
-                  {eventsGrouped.groups.map((group) => (
+                  {eventsGrouped.groups.map((group, gi) => (
                     <div key={group.dayMs}>
                       <h3 className="sticky top-0 z-10 -mx-1 mb-3 border-b border-zinc-800/60 bg-[var(--background)] px-1 py-2 text-xs font-medium tracking-wide text-zinc-500">
                         {group.label}
                       </h3>
-                      <ul className="divide-y divide-zinc-800/50">
-                        {group.events.map((ev) => (
+                      <ul className="flex flex-col">
+                        {group.events.map((ev, ei) => (
                           <AgendaEventRow
                             key={`${ev.calendarId}-${ev.id ?? "noid"}-${ev.summary ?? ""}-${group.dayMs}`}
                             ev={ev}
@@ -1021,6 +1239,10 @@ export default function Home() {
                               listHeadIdentity
                             )}
                             now={agendaNow}
+                            declinedHidden={
+                              Boolean(ev.declinedBySelf) && !showDeclinedEvents
+                            }
+                            isFirstInAgenda={gi === 0 && ei === 0}
                           />
                         ))}
                       </ul>
@@ -1031,8 +1253,8 @@ export default function Home() {
                       <h3 className="sticky top-0 z-10 -mx-1 mb-3 border-b border-zinc-800/60 bg-[var(--background)] px-1 py-2 text-xs font-medium tracking-wide text-zinc-500">
                         Other
                       </h3>
-                      <ul className="divide-y divide-zinc-800/50">
-                        {eventsGrouped.noDay.map((ev) => (
+                      <ul className="flex flex-col">
+                        {eventsGrouped.noDay.map((ev, ni) => (
                           <AgendaEventRow
                             key={`${ev.calendarId}-${ev.id ?? "noid"}-${ev.summary ?? ""}-nodate`}
                             ev={ev}
@@ -1042,6 +1264,12 @@ export default function Home() {
                               listHeadIdentity
                             )}
                             now={agendaNow}
+                            declinedHidden={
+                              Boolean(ev.declinedBySelf) && !showDeclinedEvents
+                            }
+                            isFirstInAgenda={
+                              eventsGrouped.groups.length === 0 && ni === 0
+                            }
                           />
                         ))}
                       </ul>
@@ -1049,10 +1277,14 @@ export default function Home() {
                   ) : null}
                 </div>
               )}
-              {!eventsLoading && eventsRows.length > 0 ? (
+              {!eventsLoading &&
+              eventsRows.length > 0 &&
+              (expandedVisibleEventRows.length > 0 ||
+                visibleEventRows.length === 0) ? (
                 <p className="text-[11px] text-zinc-600">
-                  {visibleEventRows.length} event
-                  {visibleEventRows.length === 1 ? "" : "s"} on your agenda
+                  {expandedVisibleEventRows.length} event
+                  {expandedVisibleEventRows.length === 1 ? "" : "s"} on your
+                  agenda
                   {eventsRows.length > visibleEventRows.length
                     ? ` (${eventsRows.length - visibleEventRows.length} already ended in this range)`
                     : ""}

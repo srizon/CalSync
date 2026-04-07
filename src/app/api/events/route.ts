@@ -73,6 +73,7 @@ export async function GET(req: NextRequest) {
     htmlLink: string | null;
     transparency: string | null;
     meetingUrl: string | null;
+    declinedBySelf: boolean;
   }[] = [];
 
   const settled = await Promise.allSettled(
@@ -89,8 +90,7 @@ export async function GET(req: NextRequest) {
         (ev) =>
           ev.status !== "cancelled" &&
           ev.transparency !== "transparent" &&
-          !ev.extendedProperties?.private?.[CALSYNC_SOURCE_KEY] &&
-          !isEventDeclinedBySelf(ev)
+          !ev.extendedProperties?.private?.[CALSYNC_SOURCE_KEY]
       );
       for (const ev of visible) {
         rows.push({
@@ -104,6 +104,7 @@ export async function GET(req: NextRequest) {
           htmlLink: ev.htmlLink ?? null,
           transparency: ev.transparency ?? null,
           meetingUrl: meetingUrlFromEvent(ev),
+          declinedBySelf: isEventDeclinedBySelf(ev),
         });
       }
     })
