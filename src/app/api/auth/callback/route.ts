@@ -18,7 +18,11 @@ import {
   resolveUserIdByIdentityKey,
   writeStoreForUser,
 } from "@/lib/store-db";
-import { listAllowedCalendarIds, pruneSyncCalendarIds } from "@/lib/accounts";
+import {
+  getPrimaryCalendarIdForAccount,
+  listAllowedCalendarIds,
+  pruneSyncCalendarIds,
+} from "@/lib/accounts";
 import {
   createSessionToken,
   isEmailAllowed,
@@ -142,6 +146,10 @@ export async function GET(req: NextRequest) {
     accounts.push(newAcc);
 
     let syncCalendarIds = prev.syncCalendarIds ?? [];
+    const primaryId = await getPrimaryCalendarIdForAccount(newAcc);
+    if (primaryId && !syncCalendarIds.includes(primaryId)) {
+      syncCalendarIds = [...syncCalendarIds, primaryId];
+    }
     const calendarIds = await listAllowedCalendarIds(accounts);
     if (calendarIds.size > 0) {
       syncCalendarIds = pruneSyncCalendarIds(syncCalendarIds, calendarIds);

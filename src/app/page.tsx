@@ -793,16 +793,30 @@ export default function Home() {
         return;
       }
       const cr = await fetch("/api/calendars");
-      if (!cr.ok) throw new Error("Could not load calendars");
-      const cj = (await cr.json()) as { calendars: Cal[] };
-      setCalendars(cj.calendars);
+      const calBody = await cr.text();
+      let cj: { calendars?: Cal[]; error?: string; message?: string } = {};
+      if (calBody.trim()) {
+        try {
+          cj = JSON.parse(calBody) as typeof cj;
+        } catch {
+          throw new Error("Could not load calendars (invalid server response)");
+        }
+      }
+      if (!cr.ok) {
+        throw new Error(
+          cj.message || cj.error || "Could not load calendars"
+        );
+      }
+      setCalendars(cj.calendars ?? []);
       const ids = m.syncCalendarIds ?? [];
-      const known = new Set(cj.calendars.map((c) => c.id));
+      const known = new Set((cj.calendars ?? []).map((c) => c.id));
       const fromServer = ids.filter((id) => known.has(id));
       if (fromServer.length) {
         setSelected(new Set(fromServer));
       } else {
-        const primaries = cj.calendars.filter((c) => c.primary).map((c) => c.id);
+        const primaries = (cj.calendars ?? [])
+          .filter((c) => c.primary)
+          .map((c) => c.id);
         setSelected(new Set(primaries));
       }
     } catch (e) {
@@ -826,6 +840,9 @@ export default function Home() {
     () => (me?.syncCalendarIds ?? []).join("\0"),
     [me?.syncCalendarIds]
   );
+  const savedSyncCount = (me?.syncCalendarIds ?? []).length;
+  /** Checkboxes can default to primaries while the server still has no sync group. */
+  const selectionSavedForSync = savedSyncCount >= 2;
 
   const loadEvents = useCallback(
     async (opts?: { silent?: boolean; signal?: AbortSignal }) => {
@@ -840,12 +857,20 @@ export default function Home() {
       try {
         const qs = new URLSearchParams({ days: String(eventsDays) });
         const r = await fetch(`/api/events?${qs.toString()}`, { signal });
-        const j = (await r.json()) as {
+        const raw = await r.text();
+        let j: {
           events?: ListedEvent[];
           loadErrors?: string[];
           error?: string;
           message?: string;
-        };
+        } = {};
+        if (raw.trim()) {
+          try {
+            j = JSON.parse(raw) as typeof j;
+          } catch {
+            throw new Error("Invalid response from events API");
+          }
+        }
         if (signal?.aborted) return;
         if (!r.ok) {
           throw new Error(j.message || j.error || r.statusText);
@@ -1004,8 +1029,13 @@ export default function Home() {
         body: JSON.stringify({ syncCalendarIds: Array.from(selected) }),
       });
       if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        throw new Error((j as { error?: string }).error || r.statusText);
+        const j = (await r.json().catch(() => ({}))) as {
+          error?: string;
+          message?: string;
+        };
+        throw new Error(
+          j.message || j.error || r.statusText || "Save failed"
+        );
       }
       await refresh();
       window.setTimeout(() => void loadEvents({ silent: true }), 4000);
@@ -1239,7 +1269,9 @@ export default function Home() {
                 <p className="text-sm text-zinc-500">
                   {eventsRows.length === 0
                     ? savedSyncGroupKey === ""
-                      ? "No calendars in your saved sync group. Open Settings, check the calendars you want, and click Save selection."
+                      ? selected.size >= 2
+                        ? "Calendars look selected in Settings, but your sync group is not saved yet. Open Settings and click Save selection."
+                        : "No calendars in your saved sync group. Open Settings, check at least two calendars, and click Save selection."
                       : "No events in this range for your selected calendars (or only cancelled or “free” items were returned)."
                     : visibleEventRows.length > 0 && !showDeclinedEvents
                       ? "Declined events are hidden. Turn on Declined events to see them in the list."
@@ -1442,13 +1474,20 @@ export default function Home() {
               </button>
               <button
                 type="button"
-                disabled={syncing || selected.size < 2}
+                disabled={syncing || !selectionSavedForSync}
                 onClick={() => void runSync()}
                 className="rounded-lg border border-zinc-600 bg-transparent px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-800 disabled:opacity-40"
               >
                 {syncing ? "Syncing…" : "Run sync now"}
               </button>
             </div>
+            {!selectionSavedForSync ? (
+              <p className="text-xs leading-relaxed text-zinc-500">
+                {selected.size < 2
+                  ? "Choose at least two calendars above, then click Save selection. Run sync uses the saved list (not the checkboxes alone)."
+                  : "Click Save selection to store your calendar choices. Run sync only works after at least two calendars are saved."}
+              </p>
+            ) : null}
           </section>
 
           {lastSync ? (

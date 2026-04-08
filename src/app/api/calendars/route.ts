@@ -10,16 +10,21 @@ export const runtime = "nodejs";
 export type { ListedCal } from "@/lib/calendar-directory";
 
 export async function GET() {
-  const userId = await requireUserId();
-  if (!userId) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  try {
+    const userId = await requireUserId();
+    if (!userId) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+    const s = await readStoreForUser(userId);
+    const items = await listCalendarsMerged(s);
+    if (!items) {
+      return NextResponse.json({ error: "not_connected" }, { status: 401 });
+    }
+    return NextResponse.json({ calendars: items });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ error: "google_api", message: msg }, { status: 502 });
   }
-  const s = await readStoreForUser(userId);
-  const items = await listCalendarsMerged(s);
-  if (!items) {
-    return NextResponse.json({ error: "not_connected" }, { status: 401 });
-  }
-  return NextResponse.json({ calendars: items });
 }
 
 export async function POST(req: NextRequest) {

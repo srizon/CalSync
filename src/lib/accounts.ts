@@ -39,6 +39,34 @@ export function pruneSyncCalendarIds(
   return syncCalendarIds.filter((id) => allowed.has(id));
 }
 
+/** Primary calendar id for this account, or null if the list cannot be read. */
+export async function getPrimaryCalendarIdForAccount(
+  acc: ConnectedAccount
+): Promise<string | null> {
+  try {
+    const cal = getCalendarClient(acc.refreshToken);
+    let pageToken: string | undefined;
+    do {
+      const res = await cal.calendarList.list({
+        maxResults: 250,
+        pageToken,
+        showHidden: false,
+      });
+      for (const c of res.data.items ?? []) {
+        if (c.primary && c.id) return c.id;
+      }
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken);
+  } catch (e) {
+    const label = acc.email ?? acc.id;
+    console.error(
+      `[CalSync] calendarList.list (primary) failed for ${label}:`,
+      e instanceof Error ? e.message : e
+    );
+  }
+  return null;
+}
+
 /** Lower rank = preferred for API calls that create/update events. */
 const ACCESS_RANK: Record<string, number> = {
   owner: 0,
